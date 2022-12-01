@@ -50,19 +50,20 @@ func NewSimpleBatcher(ctx context.Context, config SimpleBatcherConfig, job Job) 
 	return &SimpleBatcher{
 		config:           config,
 		ticker:           time.NewTicker(time.Duration(config.BatchIntervalMS) * time.Millisecond),
-		tickerFinishChan: make(chan struct{}, 1),
+		tickerFinishChan: make(chan struct{}),
 		job:              job,
 	}, nil
 }
 
 func (b *SimpleBatcher) Start(ctx context.Context) error {
 	go func() {
+		print(b.tickerFinishChan)
 		for {
 			select {
-			case <-b.tickerFinishChan:
+			case _ = <-b.ticker.C:
+				b.run(context.Background())
+			case _ = <-b.tickerFinishChan:
 				return
-			case <-b.ticker.C:
-				b.run(ctx)
 			}
 		}
 	}()
@@ -73,14 +74,13 @@ func (b *SimpleBatcher) run(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(b.config.BatchTimeoutMS)*time.Millisecond)
 	b.waitGroup.Add(1)
 	defer func() {
-		println("HIHI Defer")
 		if err := recover(); err != nil {
 			println(err)
 		}
-		cancel()
 		b.waitGroup.Done()
+		cancel()
 	}()
-	jobDoneChan := make(chan struct{}, 1)
+	jobDoneChan := make(chan struct{})
 	go func(ctx context.Context) {
 		defer func() {
 			jobDoneChan <- struct{}{}
@@ -88,16 +88,16 @@ func (b *SimpleBatcher) run(ctx context.Context) {
 		b.job.do(ctx)
 	}(ctx)
 	select {
-	case <-ctx.Done():
+	case _ = <-ctx.Done():
 		b.job.doOnTimeout(ctx)
-	case <-jobDoneChan:
+	case _ = <-jobDoneChan:
 		b.job.doOnDone(ctx)
 	}
 }
 
-func (s *SimpleBatcher) Stop(ctx context.Context) error {
-	s.ticker.Stop()
-	s.tickerFinishChan <- struct{}{}
-	s.waitGroup.Wait()
+func (b *SimpleBatcher) Stop(ctx context.Context) error {
+	b.ticker.Stop()
+	b.waitGroup.Wait()
+	b.tickerFinishChan <- struct{}{}
 	return nil
 }
